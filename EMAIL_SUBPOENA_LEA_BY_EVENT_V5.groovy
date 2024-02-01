@@ -26,6 +26,8 @@ import com.sustain.util.RichList;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import com.sustain.roa.model.ROAMessage;
+import com.sustain.person.model.Person;
+import com.sustain.condition.model.Condition;
 
 
 def int count = 0;
@@ -43,17 +45,17 @@ PrintWriter writer = new PrintWriter(log);
 HashSet events = new HashSet();
 _event != null ? events.add(_event) : events.addAll(DomainObject.find(ScheduledEvent.class, where));
 
+
 writer.println("events to process: ${events.size()}");
 
-//throw new Exception("testing");
 for (ScheduledEvent event in events) {
-//writer.println("${event} ${event.title} ".toString());
     def ScheduledEvent subpoenaedEvent = event;
     def Case cse = subpoenaedEvent.case;
     def String caseNumber = cse.caseNumber;
     def String crtNumber = !cse.collect("otherCaseNumbers[type == 'CRT'].number").isEmpty() ? cse.collect("otherCaseNumbers[type == 'CRT']").orderBy("id").last().number : "";
     def String agencyName = cse.collect("ce_Participants[type == 'AGENCY'].person.organizationName").first();
     def String agencyReportNumber = cse.collect("ce_Participants[type == 'AGENCY'].ce_ParticipantReportNumbers[type == 'LAG'].number").first();
+
     def RichList<Ce_SubpoenaTracking> personalServiceSubpoenas = subpoenaedEvent.collect("ce_SubpoenaTrackings[ participant != null && document != null && (serviceMethod == 'PERSONINV' || serviceMethod == 'BOTH')]");
     personalServiceSubpoenas = _includePreviousSubpoenas == null || _includePreviousSubpoenas == false ? subpoenaedEvent.collect("ce_SubpoenaTrackings[ participant != null && document != null && (serviceMethod == 'PERSONINV' || serviceMethod == 'BOTH') && (emailed == null || emailed == #p1)]", false) : personalServiceSubpoenas;
 
@@ -78,57 +80,65 @@ for (ScheduledEvent event in events) {
         body = "Please send replies to MisdWin@fresnocountyca.gov \r\n";
     }
 
-    def HashSet agencyList = new HashSet();
-    def HashSet spuList = new HashSet();
-    def HashSet officersList = new HashSet();
-    def HashSet spuOfficersList = new HashSet();
+    def HashSet<Person> agencyList = new HashSet();
+    def HashSet<Person> spuList = new HashSet();
+    def HashSet<Person> officersList = new HashSet();
+    def HashSet<Person> spuOfficersList = new HashSet();
 
     for (Ce_SubpoenaTracking subpoenaTracking in personalServiceSubpoenas) {
-        def RichList<CaseContact> officerContacts = subpoenaTracking.participant.person.collect("contacts[type == 'EB' && effectiveTo == null].contact");
-        def CaseContact officerContact = !officerContacts.isEmpty() ? officerContacts.first() : null;
-        def File file = subpoenaTracking.document.file;
-        def agency = subpoenaTracking.participant.person.collect("relationships[relationshipType == 'EMPLOYMENT' && relationshipSubType == 'EMPLOYER' && endDate == null].relatedPerson");
-        agency = agency == null || agency.isEmpty() ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']") : agency;
-        spuList.addAll(agency);
-        spuOfficersList.addAll(subpoenaTracking.participant.person);
-        createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency.title}");
-        if (agency == null || agency.isEmpty()) {
-            setSubpoenaEmailedBoolean(subpoenaTracking, false);
-        }
-        if (!agency.isEmpty() && !Condition.get('Person Type is Agency (Agencies which do not want their officers to receive subpoenas)').isTrue(agency.first())) {
-            sendMail(subpoenaTracking, officerContacts, subject, body, file);
-        }
-        if (agency == null || agency.isEmpty()) {
-            sendMail(subpoenaTracking, officerContacts, subject, body, file);
+        def RichList<String> officerContacts = subpoenaTracking.participant.person.collect("contacts[type == 'EB' && effectiveTo == null].contact");
+        if (!officerContacts.isEmpty()) {
+
+            def File file = subpoenaTracking.document.file;
+            def Person agency = subpoenaTracking.participant.person.collect("relationships[relationshipType == 'EMPLOYMENT' && relationshipSubType == 'EMPLOYER' && endDate == null].relatedPerson").find({ it -> it != null });
+
+            agency = agency == null ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']").find({ it -> it != null }) : agency;
+
+            agency == null ?: spuList.add(agency);
+            subpoenaTracking.participant.person == null ?: spuOfficersList.add(subpoenaTracking.participant.person);
+
+            createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency?.title}");
+            if (agency == null) {
+                setSubpoenaEmailedBoolean(subpoenaTracking, false);
+                sendMail(subpoenaTracking, officerContacts, subject, body, file);
+            }
+            if (agency != null && !Condition.get('Person Type is Agency (Agencies which do not want their officers to receive subpoenas)').isTrue(agency)) {
+                sendMail(subpoenaTracking, officerContacts, subject, body, file);
+            }
         }
     }
 
-    for (subpoenaTracking in mailSubpoenas) {
-        officerContacts = subpoenaTracking.participant.person.collect("contacts[type == 'EB' && effectiveTo == null].contact");
-        officerContact = !officerContacts.isEmpty() ? officerContacts.first() : null;
-        def File file = subpoenaTracking.document.file;
-        agency = subpoenaTracking.participant.person.collect("relationships[relationshipType == 'EMPLOYMENT' && relationshipSubType == 'EMPLOYER' && endDate == null].relatedPerson");
-        agency = agency == null || agency.isEmpty() ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']") : agency;
-        agencyList.addAll(agency);
-        officersList.addAll(subpoenaTracking.participant.person);
-        createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency.title}");
-        if (agency == null || agency.isEmpty()) {
-            setSubpoenaEmailedBoolean(subpoenaTracking, false);
-        }
-        if (!agency.isEmpty() && !Condition.get('Person Type is Agency (Agencies which do not want their officers to receive subpoenas)').isTrue(agency.first())) {
-            sendMail(subpoenaTracking, officerContacts, subject, body, file);
-        }
-        if (agency == null || agency.isEmpty()) {
-            sendMail(subpoenaTracking, officerContacts, subject, body, file);
+    for (Ce_SubpoenaTracking subpoenaTracking in mailSubpoenas) {
+
+        def RichList<String> officerContacts = subpoenaTracking.participant.person.collect("contacts[type == 'EB' && effectiveTo == null].contact");
+        if (!officerContacts.isEmpty()) {
+
+            def File file = subpoenaTracking.document.file;
+            def Person agency = subpoenaTracking.participant.person.collect("relationships[relationshipType == 'EMPLOYMENT' && relationshipSubType == 'EMPLOYER' && endDate == null].relatedPerson").find({ it -> it != null });
+
+            agency = agency == null ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']").find({ it -> it != null }) : agency;
+
+            agency == null ?: agencyList.add(agency);
+            subpoenaTracking.participant.person == null ?: officersList.add(subpoenaTracking.participant.person);
+
+            createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency?.title}");
+            if (agency == null) {
+                setSubpoenaEmailedBoolean(subpoenaTracking, false);
+                sendMail(subpoenaTracking, officerContacts, subject, body, file);
+            }
+            if (agency != null && !Condition.get('Person Type is Agency (Agencies which do not want their officers to receive subpoenas)').isTrue(agency)) {
+                sendMail(subpoenaTracking, officerContacts, subject, body, file);
+            }
         }
     }
 
-    for (agency in agencyList) {
-        RichList agencySubpoenaTrackings = new RichList();
+    for (Person agency in agencyList) {
+        def RichList<Ce_SubpoenaTracking> agencySubpoenaTrackings = new RichList();
+
         for (contact in agency.collect("contacts[type == 'EB' && effectiveTo == null].contact")) {
             for (officer in officersList) {
-                agencySubpoenaTracking = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null && serviceMethod == 'MAIL' ]", officer, false);
-                agencySubpoenaTracking1 = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null && serviceMethod == 'BOTH' ]", officer, false);
+                def RichList<Ce_SubpoenaTracking> agencySubpoenaTracking = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null && serviceMethod == 'MAIL' ]", officer, false);
+                def RichList<Ce_SubpoenaTracking> agencySubpoenaTracking1 = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null && serviceMethod == 'BOTH' ]", officer, false);
 
                 if (!agencySubpoenaTracking.isEmpty() && !agency.collect("relationships[relatedPerson == #p1 && endDate == null]", officer).isEmpty()) {
                     agencySubpoenaTrackings.addAll(agencySubpoenaTracking);
@@ -137,10 +147,11 @@ for (ScheduledEvent event in events) {
                     agencySubpoenaTrackings.addAll(agencySubpoenaTracking1);
                 }
             }
-            createRoaMessage(event.case, "3.Agency subpoena processing ${Timestamp.valueOf(LocalDateTime.now())} : ", "${agency.title} has ${agencySubpoenaTrackings.size()} subpoenas for court event: ${event.title} and the following witnesses ${agencySubpoenaTrackings.participant.title.join(", ")}");
+
+            createRoaMessage(event.case, "3.Agency subpoena processing ${Timestamp.valueOf(LocalDateTime.now())} : ", "${agency?.title} has ${agencySubpoenaTrackings.size()} subpoenas for court event: ${event.title} and the following witnesses ${agencySubpoenaTrackings.participant.title.join(", ")}");
             if (!agencySubpoenaTrackings.isEmpty()) {
                 if (agencySubpoenaTrackings.size() > 100) {
-                    ArrayList collection = splitCollection(agencySubpoenaTrackings);
+                    def ArrayList collection = splitCollection(agencySubpoenaTrackings);
                     collection.each({
                         it ->
                             if (it.size() > 100) {
@@ -160,18 +171,19 @@ for (ScheduledEvent event in events) {
         }
     }
 
-    for (agency in spuList) {
-        RichList agencySubpoenaTrackings = new RichList();
-        for (officer in spuOfficersList) {
-            agencySubpoenaTracking = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null ]", officer, false);
+    for (Person agency in spuList) {
 
-            subpoenaTracking = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null ]", officer, false).first();
+        def RichList<Ce_SubpoenaTracking> agencySubpoenaTrackings = new RichList();
+        for (officer in spuOfficersList) {
+            def RichList<Ce_SubpoenaTracking> agencySubpoenaTracking = subpoenaedEvent.collect("ce_SubpoenaTrackings[participant != null && participant.person == #p1 && document != null ]", officer, false);
+
             if (!agencySubpoenaTracking.isEmpty() && !agency.collect("relationships[relatedPerson == #p1 && endDate == null]", officer).isEmpty()) {
                 agencySubpoenaTrackings.addAll(agencySubpoenaTracking);
             }
         }
-        createRoaMessage(event.case, "3.Agency subpoena processing ${Timestamp.valueOf(LocalDateTime.now())} : ", "${agency.title} has ${agencySubpoenaTrackings.size()} subpoenas for court event: ${event.title} and the following witnesses ${agencySubpoenaTrackings.participant.title.join(", ")}");
-        contact = "spu@fresnocountyca.gov";
+
+        createRoaMessage(event.case, "3.Agency subpoena processing ${Timestamp.valueOf(LocalDateTime.now())} : ", "${agency?.title} has ${agencySubpoenaTrackings.size()} subpoenas for court event: ${event.title} and the following witnesses ${agencySubpoenaTrackings.participant.title.join(", ")}");
+        def String contact = "spu@fresnocountyca.gov";
         if (!agencySubpoenaTrackings.isEmpty()) {
             if (agencySubpoenaTrackings.size() > 100) {
                 ArrayList collection = splitCollection(agencySubpoenaTrackings);
@@ -199,6 +211,7 @@ writer.close();
 
 
 public void sendMail(Ce_SubpoenaTracking subTracking, RichList recipient, String subject, String body, File file) {
+
     Attachments attachments = new Attachments(file);
     def String noteTitle;
     def String noteContent;
@@ -207,12 +220,14 @@ public void sendMail(Ce_SubpoenaTracking subTracking, RichList recipient, String
             throw new Exception("null email address");
         }
         if (_sendMail == true) {
-            mailManager.sendMail(recipient.first(), subject, body, attachments);
+//            mailManager.sendMail(recipient.first(), subject, body, attachments);
+            logger.debug("sending officer subpoena ${recipient.first()}");
         }
         noteTitle = "2.Document Emailed Successfully ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "${subTracking} Document: ${subTracking.document} ${subTracking.document.title} email for: Court Event: ${subTracking.scheduledEvent} ${subTracking.scheduledEvent.title} \r\nWitness: ${subTracking.participant.person.fullName}; ${recipient}.".toString();
         createRoaMessage(subTracking.case, noteTitle, noteContent);
     } catch (Exception e) {
+        logger.debug("Exception:1: ${e.getMessage()}")
         noteTitle = "2.Document Email Failed ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "${subTracking} Document: ${subTracking.document} ${subTracking.document.title} email for: Court Event: ${subTracking.scheduledEvent} ${subTracking.scheduledEvent.title} \r\nWitness: ${subTracking.participant.person.fullName}, review officers email address or print and mail.".toString();
         createRoaMessage(subTracking.case, noteTitle, noteContent);
@@ -243,7 +258,8 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         ccEmails.add("daepro@fresnocountyca.gov");
         ccEmails.add("jcamarena@journaltech.com");
         if (_sendMail == true) {
-            mailManager.sendMailToAll(toEmails, ccEmails, bccEmails, subject, body, attachments);
+//            mailManager.sendMailToAll(toEmails, ccEmails, bccEmails, subject, body, attachments);
+            logger.debug("sending agency subpoena: ${toEmails}");
         }
         //writer.print(" status: successfully emailed subpoena for ");
         noteTitle = "4.${agency.organizationName} Subpoena Documents Emailed Successfully ${Timestamp.valueOf(LocalDateTime.now())}".toString();
@@ -255,13 +271,14 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         }
         //writer.println();
         noteContent += "emailed to: ${toEmails}, cc to: ${ccEmails}".toString();
-        createRoaMessage(subTracking.case, noteTitle, noteContent, subpoenaedEvent);
+        createRoaMessage(subTracking.case, noteTitle, noteContent, subTracking.scheduledEvent);
         if (subTracking.scheduledEvent.updateReason != "SUBGEN2") {
             subTracking.scheduledEvent.updateReason = "SUBGEN2";
             subTracking.scheduledEvent.lastUpdated = Timestamp.valueOf(LocalDateTime.now());
             withTx { subTracking.scheduledEvent.saveOrUpdate() }
         }
     } catch (Exception e) {
+        logger.debug("Exception:2: ${e.getMessage()}");
         //writer.print("status: failed agency email");
         noteTitle = "4.${agency.organizationName} Subpoena Documents Email Failed ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "Exception Message: ${e.getMessage()}\r\nExeption Cause: ${e.getCause()}";
@@ -272,7 +289,6 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         withTx { subTracking.scheduledEvent.saveOrUpdate() }
         createRoaMessage(subTracking.case, noteTitle, noteContent, subTracking.scheduledEvent);
     } finally {
-        //FileUtils.deleteQuietly(zippedFile);
         Files.deleteIfExists(zippedFilePath);
     }
 
