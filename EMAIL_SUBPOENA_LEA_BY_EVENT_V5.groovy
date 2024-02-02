@@ -34,15 +34,18 @@ def int count = 0;
 def Timestamp fromTimestamp = Timestamp.valueOf(LocalDateTime.now().minusDays(3L));
 def Timestamp toTimestamp = Timestamp.valueOf(LocalDateTime.now());
 
-def Where where = new Where();
-where.addGreaterThanOrEquals("dateSubpoenasGenerated", fromTimestamp);
-where.addLessThanOrEquals("dateSubpoenasGenerated", toTimestamp);
-where.addEquals("ce_SubpoenaTrackings.emailed", false);
-where.addIsNotNull("ce_SubpoenaTrackings.participant");
-where.addIsNotNull("ce_SubpoenaTrackings.document");
+def Where where = new Where()
+        .addGreaterThanOrEquals("dateSubpoenasGenerated", fromTimestamp)
+        .addLessThanOrEquals("dateSubpoenasGenerated", toTimestamp)
+        .addEquals("ce_SubpoenaTrackings.emailed", false)
+        .addIsNotNull("ce_SubpoenaTrackings.participant")
+        .addIsNotNull("ce_SubpoenaTrackings.document");
+
+
 File log = new File("\\\\torreypines\\ecourts\\subpoena\\emailLog_${LocalDateTime.now().format(DateTimeFormatter.ofPattern("MM-dd-yy@hhmms"))}.txt");
 PrintWriter writer = new PrintWriter(log);
-HashSet events = new HashSet();
+HashSet<ScheduledEvent> events = new HashSet();
+_distinctSubpoenaedAgencies = new HashSet();
 _event != null ? events.add(_event) : events.addAll(DomainObject.find(ScheduledEvent.class, where));
 
 
@@ -55,6 +58,11 @@ for (ScheduledEvent event in events) {
     def String crtNumber = !cse.collect("otherCaseNumbers[type == 'CRT'].number").isEmpty() ? cse.collect("otherCaseNumbers[type == 'CRT']").orderBy("id").last().number : "";
     def String agencyName = cse.collect("ce_Participants[type == 'AGENCY'].person.organizationName").first();
     def String agencyReportNumber = cse.collect("ce_Participants[type == 'AGENCY'].ce_ParticipantReportNumbers[type == 'LAG'].number").first();
+
+    def HashSet<Person> agencyList = new HashSet();
+    def HashSet<Person> spuList = new HashSet();
+    def HashSet<Person> officersList = new HashSet();
+    def HashSet<Person> spuOfficersList = new HashSet();
 
     def RichList<Ce_SubpoenaTracking> personalServiceSubpoenas = subpoenaedEvent.collect("ce_SubpoenaTrackings[ participant != null && document != null && (serviceMethod == 'PERSONINV' || serviceMethod == 'BOTH')]");
     personalServiceSubpoenas = _includePreviousSubpoenas == null || _includePreviousSubpoenas == false ? subpoenaedEvent.collect("ce_SubpoenaTrackings[ participant != null && document != null && (serviceMethod == 'PERSONINV' || serviceMethod == 'BOTH') && (emailed == null || emailed == #p1)]", false) : personalServiceSubpoenas;
@@ -80,11 +88,6 @@ for (ScheduledEvent event in events) {
         body = "Please send replies to MisdWin@fresnocountyca.gov \r\n";
     }
 
-    def HashSet<Person> agencyList = new HashSet();
-    def HashSet<Person> spuList = new HashSet();
-    def HashSet<Person> officersList = new HashSet();
-    def HashSet<Person> spuOfficersList = new HashSet();
-
     for (Ce_SubpoenaTracking subpoenaTracking in personalServiceSubpoenas) {
         def RichList<String> officerContacts = subpoenaTracking.participant.person.collect("contacts[type == 'EB' && effectiveTo == null].contact");
         if (!officerContacts.isEmpty()) {
@@ -95,6 +98,9 @@ for (ScheduledEvent event in events) {
             agency = agency == null ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']").find({ it -> it != null }) : agency;
 
             agency == null ?: spuList.add(agency);
+
+            agency == null ?: _distinctSubpoenaedAgencies.add(agency.organizationName);
+
             subpoenaTracking.participant.person == null ?: spuOfficersList.add(subpoenaTracking.participant.person);
 
             createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency?.title}");
@@ -119,6 +125,9 @@ for (ScheduledEvent event in events) {
             agency = agency == null ? subpoenaTracking.participant.person.collect("relationships[endDate == null].relatedPerson[personType == 'AGENCY']").find({ it -> it != null }) : agency;
 
             agency == null ?: agencyList.add(agency);
+
+            agency == null ?: _distinctSubpoenaedAgencies.add(agency.organizationName);
+
             subpoenaTracking.participant.person == null ?: officersList.add(subpoenaTracking.participant.person);
 
             createRoaMessage(event.case, "1.Subpoena to process ${Timestamp.valueOf(LocalDateTime.now())} : ", "witness: ${subpoenaTracking.participant.person.title}; related agency: ${agency?.title}");
@@ -220,8 +229,7 @@ public void sendMail(Ce_SubpoenaTracking subTracking, RichList recipient, String
             throw new Exception("null email address");
         }
         if (_sendMail == true) {
-//            mailManager.sendMail(recipient.first(), subject, body, attachments);
-            logger.debug("sending officer subpoena ${recipient.first()}");
+            mailManager.sendMail(recipient.first(), subject, body, attachments);
         }
         noteTitle = "2.Document Emailed Successfully ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "${subTracking} Document: ${subTracking.document} ${subTracking.document.title} email for: Court Event: ${subTracking.scheduledEvent} ${subTracking.scheduledEvent.title} \r\nWitness: ${subTracking.participant.person.fullName}; ${recipient}.".toString();
@@ -258,8 +266,7 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         ccEmails.add("daepro@fresnocountyca.gov");
         ccEmails.add("jcamarena@journaltech.com");
         if (_sendMail == true) {
-//            mailManager.sendMailToAll(toEmails, ccEmails, bccEmails, subject, body, attachments);
-            logger.debug("sending agency subpoena: ${toEmails}");
+            mailManager.sendMailToAll(toEmails, ccEmails, bccEmails, subject, body, attachments);
         }
         //writer.print(" status: successfully emailed subpoena for ");
         noteTitle = "4.${agency.organizationName} Subpoena Documents Emailed Successfully ${Timestamp.valueOf(LocalDateTime.now())}".toString();
@@ -340,5 +347,5 @@ public ArrayList splitCollection(Object agencySubpoenaTrackings) {
 
 
 public void zipFilesWithUtility(File zipFile, Collection<File> filesToZip) {
-    ZipUtil.zipFiles(zipFile, filesToZip);
+    ZipUtil.zipFiles(zipFile, filesToZip.unique({ File fileToZip -> fileToZip.getName() }));
 }
