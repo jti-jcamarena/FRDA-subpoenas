@@ -42,14 +42,11 @@ def Where where = new Where()
         .addIsNotNull("ce_SubpoenaTrackings.document");
 
 
-File log = new File("\\\\torreypines\\ecourts\\subpoena\\emailLog_${LocalDateTime.now().format(DateTimeFormatter.ofPattern("MM-dd-yy@hhmms"))}.txt");
-PrintWriter writer = new PrintWriter(log);
+
 HashSet<ScheduledEvent> events = new HashSet();
 _distinctSubpoenaedAgencies = new HashSet();
 _event != null ? events.add(_event) : events.addAll(DomainObject.find(ScheduledEvent.class, where));
 
-
-writer.println("events to process: ${events.size()}");
 
 for (ScheduledEvent event in events) {
     def ScheduledEvent subpoenaedEvent = event;
@@ -167,14 +164,14 @@ for (ScheduledEvent event in events) {
                                 ArrayList splitCollection = splitCollection(it);
                                 splitCollection.each({
                                     it2 ->
-                                        sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it2.document.file, it2, writer);
+                                        sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it2.document.file, it2);
                                 });
                             } else if (it.size() <= 100) {
-                                sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it.document.file, it, writer);
+                                sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it.document.file, it);
                             }
                     });
                 } else if (agencySubpoenaTrackings.size() <= 100) {
-                    sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, agencySubpoenaTrackings.document.file, agencySubpoenaTrackings.orderBy("id"), writer);
+                    sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, agencySubpoenaTrackings.document.file, agencySubpoenaTrackings.orderBy("id"));
                 }
             }
         }
@@ -202,21 +199,18 @@ for (ScheduledEvent event in events) {
                             ArrayList splitCollection = splitCollection(it);
                             splitCollection.each({
                                 it2 ->
-                                    sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it2.document.file, it2, writer);
+                                    sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it2.document.file, it2);
                             });
                         } else if (it.size() <= 100) {
-                            sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it.document.file, it, writer);
+                            sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, it.document.file, it);
                         }
                 });
             } else if (agencySubpoenaTrackings.size() <= 100) {
-                sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, agencySubpoenaTrackings.document.file, agencySubpoenaTrackings.orderBy("id"), writer);
+                sendAgencyMail(agencySubpoenaTrackings.first(), agency, contact, subject, body, agencySubpoenaTrackings.document.file, agencySubpoenaTrackings.orderBy("id"));
             }
         }
     }
 }
-writer.println("count ${count}");
-writer.flush();
-writer.close();
 
 
 public void sendMail(Ce_SubpoenaTracking subTracking, RichList recipient, String subject, String body, File file) {
@@ -242,7 +236,7 @@ public void sendMail(Ce_SubpoenaTracking subTracking, RichList recipient, String
     }
 }
 
-public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, String recipient, String subject, String body, Collection<File> files, Object agencySubpoenaTrackings, PrintWriter writer) {
+public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, String recipient, String subject, String body, Collection<File> files, Object agencySubpoenaTrackings) {
 
     Path zippedFilePath = Files.createTempFile("subpoena_email_interface", ".zip");
 
@@ -268,15 +262,15 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         if (_sendMail == true) {
             mailManager.sendMailToAll(toEmails, ccEmails, bccEmails, subject, body, attachments);
         }
-        //writer.print(" status: successfully emailed subpoena for ");
+
         noteTitle = "4.${agency.organizationName} Subpoena Documents Emailed Successfully ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "";
         for (agencySubpoenaTracking in agencySubpoenaTrackings) {
-            //writer.print(" ${agencySubpoenaTracking.participant.person.fml} | ".toString());
+
             noteContent += "${agencySubpoenaTracking} <br>${agencySubpoenaTracking.document} <br>${agencySubpoenaTracking.document.dateCreated.getClass() == Timestamp ? agencySubpoenaTracking.document.dateCreated.toLocalDateTime().format(DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm a")) : new Timestamp(agencySubpoenaTracking.document.dateCreated.getTime()).toLocalDateTime().format(DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm a"))} ${agencySubpoenaTracking.document.docDef.shortName} <br>Court Event: ${agencySubpoenaTracking.scheduledEvent} ${agencySubpoenaTracking.scheduledEvent.title} \r\nWitness: ${agencySubpoenaTracking.participant.person.fullName}<br>".toString();
             setSubpoenaEmailedBoolean(agencySubpoenaTracking, true);
         }
-        //writer.println();
+
         noteContent += "emailed to: ${toEmails}, cc to: ${ccEmails}".toString();
         createRoaMessage(subTracking.case, noteTitle, noteContent, subTracking.scheduledEvent);
         if (subTracking.scheduledEvent.updateReason != "SUBGEN2") {
@@ -286,7 +280,7 @@ public void sendAgencyMail(Ce_SubpoenaTracking subTracking, Person agency, Strin
         }
     } catch (Exception e) {
         logger.debug("Exception:2: ${e.getMessage()}");
-        //writer.print("status: failed agency email");
+
         noteTitle = "4.${agency.organizationName} Subpoena Documents Email Failed ${Timestamp.valueOf(LocalDateTime.now())}".toString();
         noteContent = "Exception Message: ${e.getMessage()}\r\nExeption Cause: ${e.getCause()}";
         for (agencySubpoenaTracking in agencySubpoenaTrackings) {
